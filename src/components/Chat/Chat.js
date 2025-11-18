@@ -1,6 +1,4 @@
 import {
-  doc,
-  setDoc,
   getFirestore,
   collection,
   orderBy,
@@ -10,9 +8,6 @@ import {
   addDoc,
 } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
-import pdfFileImage from "../../assets/images/file-type/pdf file.png";
-import docFileImage from "../../assets/images/file-type/doc icon.png";
-import docxFileImage from "../../assets/images/file-type/docx icon.png";
 import { useAuthState } from "react-firebase-hooks/auth";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -25,26 +20,46 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import axios from "axios";
 import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
-import { Button, LinearProgress, Typography } from "@mui/material";
-import { Link } from "react-router-dom";
-import { Attachment, Message } from "@mui/icons-material";
+import {
+  Button,
+  LinearProgress,
+  Typography,
+  TextField,
+  IconButton,
+  Avatar,
+} from "@mui/material";
+import {
+  Attachment,
+  Send,
+  PictureAsPdf,
+  Description,
+  Image,
+} from "@mui/icons-material";
+ 
 const db = getFirestore(chatApp);
+ 
 const Chat = () => {
-  const [selectedFile, setSelectedFile] = useState();
-  let [progress, setProgress] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
   const [user] = useAuthState(publicUserAuth);
   const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState();
-  const [employee, setEmployee] = useState();
+  const [newMessage, setNewMessage] = useState("");
+  const [employee, setEmployee] = useState(null);
   const [filteredMessages, setFilteredMessages] = useState([]);
   const { id } = useParams();
+  const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
+ 
+  // Fetch employee data
   useEffect(() => {
     axios
       .get(`http://localhost:8080/employee/${id}`)
       .then((data) => setEmployee(data.data))
       .catch((err) => console.log(err));
   }, [id]);
+ 
+  // Fetch and listen to messages
   useEffect(() => {
     const q = query(collection(db, "messages"), orderBy("timestamp"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -57,261 +72,356 @@ const Chat = () => {
     });
     return unsubscribe;
   }, []);
+ 
+  // Filter messages for this chat
   useEffect(() => {
-    setFilteredMessages(
-      messages.filter(
-        (message) =>
-          (message.data.receiverEmail === employee?.email &&
-            message.data.email === user?.email) ||
-          (message.data.receiverEmail === user?.email &&
-            message.data.email === employee?.email)
-      )
-    );
+    if (user && employee) {
+      setFilteredMessages(
+        messages.filter(
+          (message) =>
+            (message.data.receiverEmail === employee?.email &&
+              message.data.email === user?.email) ||
+            (message.data.receiverEmail === user?.email &&
+              message.data.email === employee?.email)
+        )
+      );
+    }
   }, [messages, user, employee]);
-
+ 
+  // Auto-scroll to bottom when messages change
   useEffect(() => {
-    const q = query(collection(db, "messages"), orderBy("timestamp"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMessages(
-        snapshot.docs.map((doc) => ({
-          id: doc.id,
-          data: doc.data(),
-        }))
-      );
-    });
-    return unsubscribe;
-  }, []);
-  const fileInputRef = useRef(null);
-
+    scrollToBottom();
+  }, [filteredMessages]);
+ 
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+ 
+  // Handle file upload
   const handleUpload = () => {
-    const size = selectedFile?.size / 1000000;
-    if (size <= 100) {
-      if (error) {
-        setError(null);
-      }
-      const storageRef = ref(
-        publicUserStorage,
-        `client/${user?.email}/` +
-          selectedFile?.name?.split(".")[0] +
-          "-" +
-          uuidv4() +
-          "-" +
-          `${
-            (selectedFile?.name?.split(".")?.[1] == "pdf" && "pdf") ||
-            (selectedFile?.name?.split(".")?.[1] == "doc" && "doc.doc") ||
-            (selectedFile?.name?.split(".")?.[1] == "docx" && "docx.docx") ||
-            (selectedFile?.name?.split(".")?.[1] == "jpeg" && "jpeg") ||
-            (selectedFile?.name?.split(".")?.[1] == "png" && "png") ||
-            (selectedFile?.name?.split(".")?.[1] == "jpg" && "jpg")
-          }`
-      );
-
-      const uploadTask = uploadBytesResumable(storageRef, selectedFile);
-      uploadTask.on(
-        "state_changed",
-        (snapshot) => {
-          // Get task progress, including the number of bytes uploaded and the total number of bytes to be uploaded
-          setProgress((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-
-          console.log("Upload is " + progress + "% done");
-          switch (snapshot.state) {
-            case "paused":
-              console.log("Upload is paused");
-              break;
-            case "running":
-              console.log("Upload is running");
-              break;
-          }
-        },
-        (error) => {
-          // A full list of error codes is available at
-          // https://firebase.google.com/docs/storage/web/handle-errors
-          switch (error.code) {
-            case "storage/unauthorized":
-              // User doesn't have permission to access the object
-              break;
-            case "storage/canceled":
-              // User canceled the upload
-              break;
-
-            // ...
-
-            case "storage/unknown":
-              // Unknown error occurred, inspect error.serverResponse
-              break;
-          }
-        },
-        async () => {
-          // Upload completed successfully, now we can get the download URL
-          await getDownloadURL(uploadTask.snapshot.ref).then(
-            async (downloadURL) => {
-              await addDoc(collection(db, "messages"), {
-                email: user?.email,
-                photoURL: user?.photoURL,
-                displayName: user?.displayName,
-                text: downloadURL,
-                timestamp: serverTimestamp(),
-                receiverEmail: employee?.email,
-              });
-              setSelectedFile(null);
-              toast("File sent");
-              fileInputRef.current.value = "";
-              setProgress(null);
-            }
-          );
+    if (!selectedFile) {
+      setError("No file selected");
+      toast.warn("No file selected");
+      return;
+    }
+ 
+    const size = selectedFile.size / 1000000;
+    if (size > 100) {
+      setError("File size cannot exceed 100MB");
+      toast.error("File size cannot exceed 100MB");
+      return;
+    }
+ 
+    setError(null);
+ 
+    const storageRef = ref(
+      publicUserStorage,
+      `client/${user?.email}/${
+        selectedFile.name.split(".")[0]
+      }-${uuidv4()}.${selectedFile.name.split(".").pop()}`
+    );
+ 
+    const uploadTask = uploadBytesResumable(storageRef, selectedFile);
+    uploadTask.on(
+      "state_changed",
+      (snapshot) => {
+        setProgress((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+      },
+      (error) => {
+        console.error("Upload error:", error);
+        setError("File upload failed");
+        toast.error("File upload failed");
+        setProgress(null);
+      },
+      async () => {
+        try {
+          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+          await addDoc(collection(db, "messages"), {
+            email: user?.email,
+            photoURL: user?.photoURL,
+            displayName: user?.displayName,
+            text: downloadURL,
+            timestamp: serverTimestamp(),
+            receiverEmail: employee?.email,
+            fileType: selectedFile.type,
+            fileName: selectedFile.name,
+          });
+          setSelectedFile(null);
+          toast.success("File sent successfully");
+          if (fileInputRef.current) fileInputRef.current.value = "";
+          setProgress(null);
+        } catch (err) {
+          console.error("Error adding document: ", err);
+          setError("Failed to send message");
+          toast.error("Failed to send message");
         }
-      );
-    } else {
-      if (!selectedFile) {
-        setError("No file selected");
-        toast.warn("No file sent");
-      } else {
-        setError("File Size Can Not Exceed 100MB");
-        toast.error("File Size Can Not Exceed 100MB");
       }
+    );
+  };
+ 
+  // Send text message
+  const sendMessage = async () => {
+    if (!newMessage.trim()) return;
+ 
+    try {
+      await addDoc(collection(db, "messages"), {
+        email: user?.email,
+        photoURL: user?.photoURL,
+        displayName: user?.displayName,
+        text: newMessage,
+        timestamp: serverTimestamp(),
+        receiverEmail: employee?.email,
+      });
+      setNewMessage("");
+    } catch (err) {
+      console.error("Error adding document: ", err);
+      setError("Failed to send message");
+      toast.error("Failed to send message");
     }
   };
-  const sendMessage = async () => {
-    await addDoc(collection(db, "messages"), {
-      email: user?.email,
-      photoURL: user?.photoURL,
-      displayName: user?.displayName,
-      text: newMessage,
-      timestamp: serverTimestamp(),
-      receiverEmail: employee?.email,
-    });
-
-    setNewMessage("");
+ 
+  // Handle key press (Enter to send)
+  const handleKeyPress = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
   };
-
+ 
+  // Render file icon based on file type
+  const renderFileIcon = (fileUrl, fileName) => {
+    if (fileUrl.includes(".pdf")) {
+      return <PictureAsPdf style={{ fontSize: "40px" }} color="error" />;
+    } else if (
+      fileUrl.includes(".doc") ||
+      fileUrl.includes(".docx") ||
+      fileName.includes(".doc") ||
+      fileName.includes(".docx")
+    ) {
+      return <Description style={{ fontSize: "40px" }} color="primary" />;
+    } else if (
+      fileUrl.includes(".jpg") ||
+      fileUrl.includes(".jpeg") ||
+      fileUrl.includes(".png") ||
+      fileName.includes(".jpg") ||
+      fileName.includes(".jpeg") ||
+      fileName.includes(".png")
+    ) {
+      return <Image style={{ fontSize: "40px" }} color="secondary" />;
+    } else {
+      return <Attachment style={{ fontSize: "40px" }} />;
+    }
+  };
+ 
+  // Format timestamp
+  const formatTime = (timestamp) => {
+    if (!timestamp) return "";
+    const date = timestamp.toDate();
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+ 
   return (
-    <div>
-      <div className="flex justify-center bg-gray-800 py-10 min-h-screen">
-        {user && (
-          <div>
-            <div className="flex flex-col gap-5" style={{ padding: "0 15px" }}>
-              {filteredMessages.map((msg) => (
-                <div
-                  key={msg.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: `${
-                      msg.data.email === user?.email ? "end" : "start"
-                    }`,
-                    fontWeight: `${
-                      msg.data.email === user?.email ? "" : "700"
-                    }`,
-                    margin: "10px 0",
-                  }}
-                >
-                  <div
-                    className={`message flex flex-row p-3 gap-3 rounded-[20px] items-center ${
-                      msg.data.uid === user.uid
-                        ? " text-white bg-blue-500"
-                        : " bg-white "
-                    }`}
-                  >
-                    {!msg.data.text?.includes("https") && (
-                      <p> {msg.data.text}</p>
-                    )}
-                    {msg.data.text?.includes("https") &&
-                      msg.data.text?.includes("pdf") && (
-                        <a
-                          href={`${msg.data.text}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <img src={pdfFileImage} width="50px" />
-                          <p>Click to view</p>
-                        </a>
-                      )}
-                    {msg.data.text?.includes("https") &&
-                      msg.data.text?.includes("doc") && (
-                        <a
-                          href={`${msg.data.text}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <img src={docFileImage} width="50px" />
-                          <p>Click to Download</p>
-                        </a>
-                      )}
-                    {msg.data.text?.includes("https") &&
-                      msg.data.text?.includes("docx") && (
-                        <a
-                          href={`${msg.data.text}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <img src={docxFileImage} width="50px" />
-                          <p>Click to Download</p>
-                        </a>
-                      )}
-                    {msg.data.text?.includes("https") &&
-                      msg.data.text?.includes("jpeg") && (
-                        <p>
-                          <img src={msg.data.text} width="200px" />
-                        </p>
-                      )}
-                    {msg.data.text?.includes("https") &&
-                      msg.data.text?.includes("jpg") && (
-                        <p>
-                          <img src={msg.data.text} width="200px" />
-                        </p>
-                      )}
-                    {msg.data.text?.includes("https") &&
-                      msg.data.text?.includes("png") && (
-                        <p>
-                          <img src={msg.data.text} width="200px" />
-                        </p>
-                      )}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ padding: "0 15px" }}>
-              {!selectedFile && (
-                <div>
-                  <input
-                    style={{ width: "85%", padding: "20px" }}
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                  />
-
-                  <Button
-                    // style={{ display: "flex", alignItems: "center" }}
-                    onClick={sendMessage}
-                  >
-                    <Message sx={{ fontSize: "30px" }} /> Send Message
-                  </Button>
-                </div>
-              )}
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        backgroundColor: "#f5f5f5",
+      }}
+    >
+      {/* Header Section */}
+      <div
+        style={{
+          padding: "16px",
+          backgroundColor: "#2E3135",
+          color: "white",
+          borderBottom: "1px solid #e0e0e0",
+          display: "flex",
+          alignItems: "center",
+          gap: "16px",
+        }}
+      >
+        <Avatar src={employee?.photoURL} alt={employee?.displayName} />
+        <div>
+          <Typography variant="h6" style={{ margin: 0 }}>
+            {employee?.displayName}
+          </Typography>
+          <Typography variant="body2" style={{ margin: 0 }}>
+            {employee?.email}
+          </Typography>
+        </div>
+      </div>
+ 
+      {/* Messages Section */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {filteredMessages.map((msg) => (
+          <div
+            key={msg.id}
+            style={{
+              display: "flex",
+              justifyContent:
+                msg.data.email === user?.email ? "flex-end" : "flex-start",
+              marginBottom: "16px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                maxWidth: "70%",
+              }}
+            >
               <div
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  margin: "10px 0",
-                  justifyContent: "center",
+                  backgroundColor:
+                    msg.data.email === user?.email ? "#1976d2" : "#e0e0e0",
+                  color:
+                    msg.data.email === user?.email
+                      ? "white"
+                      : "rgba(0, 0, 0, 0.87)",
+                  padding: "16px",
+                  borderRadius: "16px",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+                  wordBreak: "break-word",
                 }}
               >
-                <Attachment />
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={(e) => {
-                    const file = e.target.files ? e.target.files[0] : undefined;
-                    setSelectedFile(file);
-                  }}
-                />
-                <Button onClick={handleUpload}>Upload file</Button>
+                {msg.data.text?.includes("https") || msg.data.fileType ? (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                    }}
+                  >
+                    <a
+                      href={msg.data.text}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        color:
+                          msg.data.email === user?.email ? "white" : "#1976d2",
+                        textDecoration: "none",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                      }}
+                    >
+                      {renderFileIcon(msg.data.text, msg.data.fileName || "")}
+                      <Typography variant="body2" style={{ marginTop: "8px" }}>
+                        {msg.data.fileName || "Download file"}
+                      </Typography>
+                    </a>
+                  </div>
+                ) : (
+                  <Typography>{msg.data.text}</Typography>
+                )}
               </div>
-
-              {error && <Typography sx={{ color: "red" }}>{error}</Typography>}
-              {progress && (
-                <LinearProgress variant="determinate" value={progress} />
-              )}
+              <Typography
+                variant="caption"
+                style={{
+                  alignSelf:
+                    msg.data.email === user?.email ? "flex-end" : "flex-start",
+                  marginTop: "4px",
+                  opacity: 0.7,
+                }}
+              >
+                {formatTime(msg.data.timestamp)}
+              </Typography>
             </div>
+          </div>
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+ 
+      {/* Input Section */}
+      <div
+        style={{
+          padding: "16px",
+          borderTop: "1px solid #e0e0e0",
+          backgroundColor: "white",
+        }}
+      >
+        {/* Text message input */}
+        <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+          <TextField
+            fullWidth
+            multiline
+            maxRows={4}
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Type your message here..."
+            variant="outlined"
+            size="small"
+          />
+          <IconButton
+            color="primary"
+            onClick={sendMessage}
+            disabled={!newMessage.trim()}
+            style={{ alignSelf: "flex-end" }}
+          >
+            <Send />
+          </IconButton>
+        </div>
+ 
+        {/* File upload section */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+            style={{ display: "none" }}
+            id="file-upload"
+          />
+          <label htmlFor="file-upload">
+            <Button
+              variant="outlined"
+              component="span"
+              startIcon={<Attachment />}
+              size="small"
+            >
+              Select File
+            </Button>
+          </label>
+ 
+          <Typography variant="body2" style={{ flex: 1 }}>
+            {selectedFile ? selectedFile.name : "No file selected"}
+          </Typography>
+ 
+          <Button
+            variant="contained"
+            onClick={handleUpload}
+            disabled={!selectedFile}
+            size="small"
+          >
+            Upload
+          </Button>
+        </div>
+ 
+        {/* Error and progress indicators */}
+        {error && (
+          <Typography color="error" style={{ marginTop: "8px" }}>
+            {error}
+          </Typography>
+        )}
+ 
+        {progress !== null && (
+          <div style={{ marginTop: "8px" }}>
+            <LinearProgress variant="determinate" value={progress} />
+            <Typography
+              variant="body2"
+              style={{ textAlign: "center", marginTop: "4px" }}
+            >
+              {Math.round(progress)}% complete
+            </Typography>
           </div>
         )}
       </div>
@@ -319,5 +429,5 @@ const Chat = () => {
     </div>
   );
 };
-
+ 
 export default Chat;
